@@ -1,0 +1,306 @@
+#!/bin/sh
+
+#*****************************************************************#
+#* * *                   Projekt 1 - shell                   * * *#
+#* * *                                                       * * *#
+#* * *                  Jméno: Jiří Mládek                   * * *#
+#* * *                                                       * * *#
+#* * *                   Login: xmlade01                     * * *#
+#* * *                                                       * * *#
+#* * *                    Předmět: IOS                       * * *#
+#* * *                                                       * * *#
+#* * *                  Datum: 4.04.2021                     * * *#
+#*****************************************************************#
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+#inicializace proměnných
+DATETIME_BEFORE="9999-99-99 99:99:99"
+WIDTH_COUNTER=0
+COMMAND_COUNTER=0
+
+#funkce pro tisk nápovědy
+print_help()
+{
+  echo "ÚČEL PROGRAMU: analýza záznamu systému pro obchodování na burze. Skript filtruje záznamy a poskytuje statistiky podle zadání uživatele."
+  echo "POUŽITÍ PROGRAMU: tradelog [-h|--help] [FILTR] [PŘÍKAZ] [LOG [LOG2 [...]]]"
+  echo
+  echo "PŘÍKAZY:"
+  echo "         list-tick – výpis seznamu vyskytujících se burzovních symbolů, tzv. 'tickerů'"
+  echo "         profit – výpis celkového zisku z uzavřených pozic"
+  echo "         pos – výpis hodnot aktuálně držených pozic seřazených sestupně dle hodnoty"
+  echo "         last-price – výpis poslední známé ceny pro každý ticker"
+  echo "         hist-ord – výpis histogramu počtu transakcí dle tickeru"
+  echo "         graph-pos – výpis grafu hodnot držených pozic dle tickeru"
+  echo
+  echo "FILTRY:"
+  echo "         -a DATETIME – after: jsou uvažovány pouze záznamy PO tomto datu (bez tohoto data). DATETIME je formátu YYYY-MM-DD HH:MM:SS."
+  echo "         -b DATETIME – before: jsou uvažovány pouze záznamy PŘED tímto datem (bez tohoto data)"
+  echo "         -t TICKER – jsou uvažovány pouze záznamy odpovídající danému tickeru. Při více výskytech přepínače se bere množina všech uvedených tickerů."
+  echo "         -w WIDTH – u výpisu grafů nastavuje jejich šířku, tedy délku nejdelšího řádku na WIDTH. Tedy, WIDTH musí být kladné celé číslo. Více výskytů přepínače je chybné spuštění."
+  echo
+  echo "NÁPOVĚDA:"
+  echo "         -h a --help vypíšou nápovědu s krátkým popisem každého příkazu a přepínače."
+}
+
+#OBECNÝ POSTUP:
+#              Obsahy souborů nahraji do proměnné INPUT. Poté následuje vyfiltrování řádků (pokud je zadaný příkaz k filtrování).
+#              Výstup filtrování jde poté příkazům. Na konci programu je obsah proměnné INPUT zobrazen na stdout.
+#              Argumenty programu je možné psát v jakémkoliv pořadí.
+
+#ZAČÁTEK HLAVNÍ ČÁSTI PROGRAMU
+#cyklus while pro procházení argumentů programu, nahrání do proměnných a načtení souborů
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    -h | --help)
+      print_help
+      exit 0 #ukončení programu
+      ;;
+    -a)
+      NEW_DATETIME_AFTER="$2"
+      #ošetření stavu, kdy po přepínači nenásleduje parametr
+      if [ -z "$NEW_DATETIME_AFTER" ];then
+        echo "Error: Přepínač musí mít parametr!" 1>&2
+        exit 1
+      fi
+      #kontrola formátu data a času a vybrání správného, pokud je jich zadáno více
+      if echo "$NEW_DATETIME_AFTER" | grep -Eq '^[0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]$'; then
+        if expr "$NEW_DATETIME_AFTER" \> "$DATETIME_AFTER" >/dev/null; then
+          DATETIME_AFTER="$NEW_DATETIME_AFTER" #do proměnné DATETIME_AFTER se nahraje novější čas
+        fi
+      else
+        echo "Error: Datum a čas nejsou zadány ve správném tvaru!" 1>&2
+        exit 1
+      fi
+      shift
+      shift
+      ;;
+    -b)
+      NEW_DATETIME_BEFORE="$2"
+      #ošetření stavu, kdy po přepínači nenásleduje parametr
+      if [ -z "$NEW_DATETIME_BEFORE" ];then
+        echo "Error: Přepínač musí mít parametr!" 1>&2
+        exit 1
+      fi
+      #kontrola formátu data a času a vybrání správného, pokud je jich zadáno více
+      if echo "$NEW_DATETIME_BEFORE" | grep -Eq '^[0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]$'; then
+        if expr "$NEW_DATETIME_BEFORE" \< "$DATETIME_BEFORE" >/dev/null;then
+          DATETIME_BEFORE="$NEW_DATETIME_BEFORE" #do proměnné DATETIME_BEFORE se nahraje starší čas
+        fi
+      else
+        echo "Error: Datum a čas nejsou zadány ve správném tvaru!" 1>&2
+        exit 1
+      fi
+      shift
+      shift
+      ;;
+    -t)
+      #proměnné CONDITION přiřadím hodnotu 1, pokud se v tickeru nachází nepovolený znak...jinak jí dám hodnotu 0
+      CONDITION=$(awk -v ticker="$2" 'BEGIN{first = index(ticker, ";"); second = index(ticker, " "); if(first == 0 && second == 0){print 0} else {print 1}}')
+      #kontrola správného formátu tickeru, ticker nesmí obsahovat mezeru ani ';'
+      if [ "$CONDITION" -eq 1 ];then
+        echo "Error: Ticker není zadán ve správném formátu!" 1>&2
+        exit 1
+      fi
+      #konkatenace tickerů, oddělím je středníkem
+      if [ -z "$TICKER" ];then
+        TICKER="$2"
+      else
+        TICKER="${TICKER};"
+        TICKER="${TICKER}$2"
+      fi
+      #ošetření případu, kdy nebude mít přepínač parametr
+      if [ -z "$TICKER" ];then
+        echo "Error: Přepínač musí mít parametr!" 1>&2
+        exit 1
+      fi
+      shift
+      shift
+      ;;
+    -w)
+      #podmínka pro možné zadání jenom jednoho přepínače
+      if [ "$WIDTH_COUNTER" -ge 1 ]; then
+        echo "Error: Nelze zadat přepínač -w vícekrát." 1>&2
+        exit 1
+      else
+        WIDTH=$2
+        WIDTH_COUNTER=`expr $WIDTH_COUNTER + 1`
+      fi
+      #ošetření stavu, kdy nebude mít přepínač parametr
+      if [ -z "$WIDTH" ];then
+        echo "Error: Přepínač musí mít parametr!" 1>&2
+        exit 1
+      fi
+      #podmínka pro správný formát parametru přepínače
+      if echo "$WIDTH" | grep -Eq '^[0-9]*$'; then
+        :
+      else
+        echo "Error: Ticker není zadán ve správném tvaru!" 1>&2
+        exit 1
+      fi
+      shift
+      shift
+      ;;
+    list-tick | profit | pos | last-price | hist-ord | graph-pos)
+      #nahrání do proměnné a ošetření stavu, kdy bude zadán příkaz vícekrát
+      if [ "$COMMAND_COUNTER" -ge 1 ]; then
+        echo "Error: Lze zadat pouze jeden příkaz." 1>&2
+        exit 1
+      else
+        COMMAND=$1
+        COMMAND_COUNTER=`expr $COMMAND_COUNTER + 1`
+      fi
+      shift
+      ;;
+    #Načítání souborů. Pokud soubor nejde otevřít nebo neexistuje jeho jméno, program se ukončí. Takto ošetřím i případné nesmyslné příkazy, budou považovány za jméno souboru, a ten nepůjde otevřít.
+    *.gz)
+      GZIP_FILES="$1"
+      if [ -r "$GZIP_FILES" ];then
+        INPUT="$INPUT$(gzip -d -c "$GZIP_FILES" | cat)" #do proměnné INPUT nahraju obsah souboru, nebo zkonkatenuji s minulým obsahem proměnné
+        INPUT=$(printf "%s" "$INPUT" "\n") #přidá mezi soubory nový řádek, nový řádek na úplném konci obsahu souborů odstraním později
+      else
+        echo "Error: Soubor nelze otevřít!" 1>&2
+        exit 1
+      fi
+      shift
+      ;;
+    *)
+      FILES="$1"
+      if [ -r "$FILES" ];then
+        INPUT="$INPUT$(cat "$FILES")" #do proměnné INPUT nahraju obsah souboru, nebo zkonkatenuji s minulým obsahem proměnné
+        INPUT=$(printf "%s" "$INPUT" "\n") #přidá mezi soubory nový řádek, nový řádek na úplném konci obsahu souborů odstraním později
+      else
+        echo "Error: Soubor nelze otevřít!" 1>&2
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+#odstranění nového řádku na konci souboru
+INPUT=$(printf "%b\n" "$INPUT" | awk '/./')
+#pokud nebyly zadány soubory, tak čte ze stdin
+if [ -z "$INPUT" ]; then
+  INPUT=$(cat)
+fi
+
+#=====FILTROVÁNÍ
+#filtrování podle tickerů
+if [ -n "$TICKER" ]; then
+  #tickery rozdělím do pole v awku, následně nahraji do proměnné pouze řádky s tickery
+  INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v tickers="$TICKER" 'BEGIN{split(tickers, array)}{for(ticker in array) if($2 == array[ticker]) print}')
+fi
+#filtrování podle data a času
+if [ -n "$DATETIME_AFTER" ]; then
+  INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v time="$DATETIME_AFTER" '{if($1 > time) print}')
+fi
+
+if [ "$DATETIME_BEFORE" != "9999-99-99 99:99:99" ]; then
+  INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v time="$DATETIME_BEFORE" '{if($1 < time) print}')
+fi
+
+#=====PŘÍKAZY
+case $COMMAND in
+  list-tick)
+    #vytiskne všechny typy tickerů seřazené podle abecedy
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' '{print $2}' | sort -u)
+    ;;
+  profit)
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' 'BEGIN{sum=0}
+                                        {if($3 == "sell")sum+=$4*$6;
+                                         if($3 == "buy")sum-=$4*$6;}
+                                         END{printf "%.2f\n", sum}')
+    ;;
+  pos)
+    #v awku si dám k sobě pomocí asociativních polí stejné tickery, vypočtu počet držených jednotek a poté zjistím poslední cenu tickeru. Nakonec seřadím sestupně podle hodnoty ve druhém sloupci.
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v OFMT='%.2f' '{if($3 == "buy"){ticker_units[$2] += $6};
+                                                        if($3 == "sell"){ticker_units[$2] -= $6};
+                                                        ticker_last_value[$2] = $4;}
+                                                        END{for(ticker in ticker_units) print ticker, ticker_units[ticker]*ticker_last_value[ticker]}' | sort -r -n -k 2,2)
+    #kvůli zarovnání si najdu nejdelší číslo
+    MAX_LENGTH=$(printf "%b\n" "$INPUT" | awk '{current_len=length($2);
+                                       max_len=(current_len>max_len?current_len:max_len);}
+                                       END{print max_len}')
+    INPUT=$(printf "%b\n" "$INPUT" | awk -v max_length="$MAX_LENGTH" '{printf "%-10s: %*.2f\n", $1, max_length, $2}') #za hvězdičku se dosadí délka nejdelšího čísla
+    ;;
+  last-price)
+    #v awku si dám k sobě pomocí asociativních polí stejné tickery, poté vypíšu poslední cenu tickeru
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v OFMT='%.2f' '{ticker_last_value[$2] = $4}
+                                                        END{for(ticker in ticker_last_value) print ticker, ticker_last_value[ticker]}' | sort -k 1,1)
+    #kvůli zarovnání si najdu nejdelší číslo
+    MAX_LENGTH=$(printf "%b\n" "$INPUT" | awk '{current_len=length($2);
+                                       max_len=(current_len>max_len?current_len:max_len);}
+                                       END{print max_len}')
+    INPUT=$(printf "%b\n" "$INPUT" | awk -v max_length="$MAX_LENGTH" '{printf "%-10s: %*.2f\n", $1, max_length, $2}') #za hvězdičku se dosadí délka nejdelšího čísla
+    ;;
+  hist-ord)
+    #v awku si pomocí asociativních polí vypočtu počet výskytů tickerů, nakonec tickery seřadím podle abecedy
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' '{ticker_units[$2] += 1}
+                                         END{for(ticker in ticker_units) print ticker, ticker_units[ticker]}' | sort -k 1,1)
+    #případ, kdy bude hist-ord zadán s přepínačem -w
+    if [ -n "$WIDTH" ]; then
+      MAX_NUM=0
+      RATIO=0
+      #najdu největší počet výskytů
+      MAX_NUM=$(printf "%b\n" "$INPUT" | awk '{current_num=$2;
+                                      max_num=(current_num>max_num?current_num:max_num);}
+                                      END{print max_num}')
+      #vypočítám poměr
+      RATIO=$(awk -v width="$WIDTH" -v max_num="$MAX_NUM" 'BEGIN {print (max_num / width)}')
+      #vypsání tickeru a výsledného počtu znaků
+      INPUT=$(printf "%b\n" "$INPUT" | awk -v ratio="$RATIO" '{final_num = int(($2 / ratio)+0.01);
+                                                      print $1, final_num}')
+      #místo čísla vypíšu příslušný počet '#', naformátuji výstup
+      INPUT=$(printf "%b\n" "$INPUT" | awk -v cross="#" '{string="";
+                                                 for(i=0; i < $2; i++){string=string cross};
+                                                 if($2 == 0){space=""} else {space=" "};
+                                                 printf "%-10s:%s%s\n", $1, space, string}')
+    #případ, kdy bude hist-ord zadán bez přepínače -w
+    else
+      INPUT=$(printf "%b\n" "$INPUT" | awk -v cross="#" '{string="";
+                                                 for(i=0; i < $2; i++){string=string cross};
+                                                 if($2 == 0){space=""} else {space=" "};
+                                                 printf "%-10s:%s%s\n", $1, space, string}')
+    fi
+    ;;
+  graph-pos)
+    #výpočet hodnoty aktuálně držených pozic
+    INPUT=$(printf "%b\n" "$INPUT" | awk -F ';' -v OFMT='%.2f' '{if($3 == "buy"){ticker_units[$2] += $6};
+                                                        if($3 == "sell"){ticker_units[$2] -= $6};
+                                                        ticker_last_value[$2] = $4}
+                                                        END{for(ticker in ticker_units) print ticker, ticker_units[ticker]*ticker_last_value[ticker]}' | sort -k 1,1)
+    #vypsání tickeru, znaménka a absolutní hodnoty čísla z předchozího výpočtu
+    INPUT=$(printf "%b\n" "$INPUT" | awk -v OFMT='%.2f' '{current_num=$2;
+                                                 abs_num=(current_num < 0? current_num*-1 : current_num);
+                                                 sign=(current_num < 0? "-" : "+");
+                                                 print $1, sign, abs_num}')
+    #vyhledání největšího čísla
+    MAX_NUM=$(printf "%b\n" "$INPUT" | awk '{current_num=$3;
+                                    max_num=(current_num>max_num?current_num:max_num)}
+                                    END{print max_num}')
+    #pokud byl příkaz graph-pos zadán s přepínačem -w
+    if [ -n "$WIDTH" ]; then
+      #výpočet poměru
+      RATIO=$(awk -v width="$WIDTH" -v max_num="$MAX_NUM" 'BEGIN {print (max_num / width)}')
+      #vypsání tickeru, znaménka a počtu výskytů znaku(#/!)
+      INPUT=$(printf "%b\n" "$INPUT" | awk -v ratio="$RATIO" '{final_num = int(($3 / ratio)+0.01);
+                                                      print $1, $2, final_num}')
+    #pokud byl příkaz graph-pos zadán bez přepínače -w
+    else
+      #jeden znak(#/!) se bude rovnat hodnotě 1000
+      INPUT=$(printf "%b\n" "$INPUT" | awk '{final_num = int($3 / 1000);
+                                    print $1, $2, final_num}')
+    fi
+    #podle znaménka se vypíší buď # nebo !. Pokud nebude vytisknut ani jeden ze znaků, nebude po dvojtečce následovat mezera.
+    INPUT=$(printf "%b\n" "$INPUT" | awk -v cross="#" -v exclam_mark="!" '{string="";
+                                                                  if($2 == "-") for(i=0; i < $3; i++){string=string exclam_mark};
+                                                                  if($2 == "+")for(i=0; i < $3; i++){string=string cross};
+                                                                  if($3 == 0){space=""} else {space=" "};
+                                                                  printf "%-10s:%s%s\n", $1, space, string}')
+    ;;
+esac
+
+printf "%s\n" "$INPUT"
+exit 0
+#KONEC HLAVNÍ ČÁSTI PROGRAMU
